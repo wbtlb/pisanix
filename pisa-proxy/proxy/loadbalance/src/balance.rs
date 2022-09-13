@@ -33,6 +33,7 @@ impl Default for AlgorithmName {
 
 pub trait LoadBalance {
     fn next(&mut self) -> Option<Endpoint>;
+    fn next_by_name(&self, addr: String) -> Option<Endpoint>;
     fn add(&mut self, endpoint: Endpoint);
     fn item_exists(&self, endpoint: &Endpoint) -> bool;
     fn get_all(&mut self) -> &Vec<Endpoint>;
@@ -51,6 +52,13 @@ impl LoadBalance for BalanceType {
         match self {
             BalanceType::Random(inner_random) => inner_random.next(),
             BalanceType::RoundRobin(inner_roundrobin) => inner_roundrobin.next(),
+        }
+    }
+
+    fn next_by_name(&self, addr: String) -> Option<Endpoint> {
+        match self {
+            BalanceType::Random(inner_random) => inner_random.next_by_name(addr),
+            BalanceType::RoundRobin(inner_roundrobin) => inner_roundrobin.next_by_name(addr),
         }
     }
 

@@ -121,7 +121,9 @@ mod test {
         ];
 
         let mut buf = BytesMut::from(&data[..]);
+        println!("{:?}", buf);
         let info = buf.decode_column();
+        println!("{:?}", info);
         assert_eq!(info.charset, 0x3f);
         assert_eq!(info.column_type, ColumnType::MYSQL_TYPE_VAR_STRING);
         assert_eq!(info.column_flag, 0x80);

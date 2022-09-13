@@ -31,8 +31,6 @@ use mysql_protocol::{
     session::SessionMut,
     util::{is_eof, length_encode_int},
 };
-use mysql_protocol::row::RowData;
-
 use pisa_error::error::{Error, ErrorKind};
 use strategy::route::RouteInput;
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -44,11 +42,6 @@ use crate::{
     mysql::{MySQLService, ReqContext, RespContext},
     transaction_fsm::{TransEventName, TransFsm},
 };
-use mysql_protocol::column::{Column,ColumnInfo};
-use std::sync::Arc;
-use mysql_protocol::row::RowDataText;
-use mysql_protocol::row::RowDataTyp;
-use mysql_protocol::client::codec::QueryResultStream;
 
 pub struct PisaMySQLService<T, C> {
     _phat: PhantomData<(T, C)>,
@@ -187,6 +180,109 @@ where
         Ok(())
     }
 
+    // async fn query_inner_get_conn(
+    //     req: &mut ReqContext<T, C>,
+    //     sql: &str,
+    // ) -> Result<PoolConn<ClientConn>, Error> {
+    //     match Self::get_ast(req, sql) {
+    //         Err(err) => {
+    //             error!("err: {:?}", err);
+    //             Self::fsm_trigger(
+    //                 &mut req.fsm,
+    //                 TransEventName::QueryEvent,
+    //                 RouteInput::Statement(sql),
+    //             )
+    //             .await
+    //         }
+
+    //         Ok(stmt) => match &stmt[0] {
+    //             SqlStmt::Set(stmt) => {
+    //                 Self::handle_set_stmt(req, stmt, sql).await;
+    //                 req.fsm.get_conn().await
+    //             }
+    //             //TODO: split sql stmt for sql audit
+    //             SqlStmt::BeginStmt(_stmt) => {
+    //                 Self::fsm_trigger(
+    //                     &mut req.fsm,
+    //                     TransEventName::StartEvent,
+    //                     RouteInput::Transaction(sql),
+    //                 )
+    //                 .await
+    //             }
+
+    //             SqlStmt::Start(_stmt) => {
+    //                 Self::fsm_trigger(
+    //                     &mut req.fsm,
+    //                     TransEventName::StartEvent,
+    //                     RouteInput::Transaction(sql),
+    //                 )
+    //                 .await
+    //             }
+
+    //             SqlStmt::Commit(_stmt) => {
+    //                 Self::fsm_trigger(
+    //                     &mut req.fsm,
+    //                     TransEventName::CommitRollBackEvent,
+    //                     RouteInput::Transaction(sql),
+    //                 )
+    //                 .await
+    //             }
+
+    //             SqlStmt::Rollback(_stmt) => {
+    //                 Self::fsm_trigger(
+    //                     &mut req.fsm,
+    //                     TransEventName::CommitRollBackEvent,
+    //                     RouteInput::Transaction(sql),
+    //                 )
+    //                 .await
+    //             }
+
+    //             SqlStmt::SelectStmt(_stmt) => {
+    //                 req.sharding.clone().lock().sharding_test();
+    //                 Self::fsm_trigger(
+    //                     &mut req.fsm,
+    //                     TransEventName::QueryEvent,
+    //                     RouteInput::Statement(sql),
+    //                 )
+    //                 .await
+    //             }
+
+    //             SqlStmt::InsertStmt(_stmt) => {
+    //                 Self::fsm_trigger(
+    //                     &mut req.fsm,
+    //                     TransEventName::QueryEvent,
+    //                     RouteInput::Statement(sql),
+    //                 ).await
+    //             }
+
+    //             SqlStmt::UpdateStmt(_stmt) => {
+    //                 Self::fsm_trigger(
+    //                     &mut req.fsm,
+    //                     TransEventName::QueryEvent,
+    //                     RouteInput::Statement(sql),
+    //                 ).await
+    //             }
+
+    //             SqlStmt::DeleteStmt(_stmt) => {
+    //                 Self::fsm_trigger(
+    //                     &mut req.fsm,
+    //                     TransEventName::QueryEvent,
+    //                     RouteInput::Statement(sql),
+    //                 ).await
+    //             }
+
+    //             _ => {
+    //                 Self::fsm_trigger(
+    //                     &mut req.fsm,
+    //                     TransEventName::QueryEvent,
+    //                     RouteInput::Statement(sql),
+    //                 )
+    //                 .await
+    //             }
+    //         },
+    //     }
+    // }
+
     // Set charset name
     pub async fn handle_set_stmt(req: &mut ReqContext<T, C>, stmt: &SetOptValues, input: &str) {
         match stmt {
@@ -277,7 +373,6 @@ where
         req: &mut ReqContext<T, C>,
         mut stream: ResultsetStream<'b>,
     ) -> Result<(BytesMut, BytesMut), ProtocolError> {
-    // ) -> Result<(BytesMut, BytesMut), ProtocolError> {
         let data = stream.next().await;
 
         let header = match data {
@@ -302,7 +397,6 @@ where
             .codec_mut()
             .encode(PacketSend::EncodeOffset(header[4..].into(), 0), &mut buf);
 
-        let mut col_buf = vec![];
         for _ in 0..cols {
             let data = stream.next().await;
             let data = match data {
@@ -311,15 +405,11 @@ where
                 None => break,
             };
 
-            col_buf.extend_from_slice(&data);
             let _ = req
                 .framed
                 .codec_mut()
                 .encode(PacketSend::EncodeOffset(data[4..].into(), buf.len()), &mut buf);
         }
-
-        let col_info = col_buf.as_slice().decode_columns();
-        let arc_col_info: Arc<[ColumnInfo]> = col_info.into_boxed_slice().into();
 
         // read eof
         let _ = stream.next().await;
@@ -329,8 +419,9 @@ where
             .codec_mut()
             .encode(PacketSend::EncodeOffset(make_eof_packet()[4..].into(), buf.len()), &mut buf);
 
+        println!("header >>> {:?}", buf);
         let hheader = buf.clone();
-
+        
         let mut nrow: BytesMut = BytesMut::new();
 
         loop {
@@ -348,112 +439,23 @@ where
 
             nrow.put_slice(&row);
 
-            let mut row_data_text = RowDataText::new(arc_col_info.clone(), row.clone().split_off(4));
-            // println!("{:?}", row_data_text);
-            let str = row_data_text.decode_with_name::<String>("str").unwrap().unwrap();
-            println!("{:?}", str);
-
             let _ = req
                 .framed
                 .codec_mut()
                 .encode(PacketSend::EncodeOffset(row[4..].into(), buf.len()), &mut buf);
         }
 
+        // println!("buf >>> {:?}", buf);
+
+        // let _ = req
+        //     .framed
+        //     .codec_mut()
+        //     .encode(PacketSend::EncodeOffset(make_eof_packet()[4..].into(), buf.len()), &mut buf);
+
+        // req.framed.send(PacketSend::Origin(buf[..].into())).await?;
+
         Ok((hheader, nrow))
     }
-
-    // pub async fn handle_resultset_header<'b> (
-    //     req: &mut ReqContext<T, C>,
-    //     mut stream: ResultsetStream<'b>,
-    // ) -> Result<(BytesMut, stream), ProtocolError>{
-    //     let data = stream.next().await;
-
-    //     let header = match data {
-    //         Some(Ok(data)) => data,
-    //         Some(Err(e)) => return Err(e),
-    //         None => return Ok(BytesMut::new()),
-    //     };
-
-    //     let ok_or_err = header[4];
-
-    //     if ok_or_err == OK_HEADER || ok_or_err == ERR_HEADER {
-    //         req.framed.send(PacketSend::Encode(header[4..].into())).await?;
-    //         return Ok(BytesMut::new());
-    //     }
-
-    //     let (cols, ..) = length_encode_int(&header[4..]);
-
-    //     let mut buf = BytesMut::with_capacity(1 << 16);
-
-    //     let _ = req
-    //         .framed
-    //         .codec_mut()
-    //         .encode(PacketSend::EncodeOffset(header[4..].into(), 0), &mut buf);
-
-    //     let mut col_buf = vec![];
-    //     for _ in 0..cols {
-    //         let data = stream.next().await;
-    //         let data = match data {
-    //             Some(Ok(data)) => data,
-    //             Some(Err(e)) => return Err(e),
-    //             None => break,
-    //         };
-
-    //         col_buf.extend_from_slice(&data);
-    //         let _ = req
-    //             .framed
-    //             .codec_mut()
-    //             .encode(PacketSend::EncodeOffset(data[4..].into(), buf.len()), &mut buf);
-    //     }
-
-    //     let col_info = col_buf.as_slice().decode_columns();
-    //     let arc_col_info: Arc<[ColumnInfo]> = col_info.into_boxed_slice().into();
-
-    //     // read eof
-    //     let _ = stream.next().await;
-
-    //     let _ = req
-    //         .framed
-    //         .codec_mut()
-    //         .encode(PacketSend::EncodeOffset(make_eof_packet()[4..].into(), buf.len()), &mut buf);
-
-    //     let hheader = buf.clone();
-
-    //     Ok(hheader)
-    // }
-
-    // pub async fn handle_result_row<'b> (
-    //     req: &mut ReqContext<T, C>,
-    //     mut stream: ResultsetStream<'b>,
-    // ) -> Result<(), ProtocolError> {
-    //     let mut nrow: BytesMut = BytesMut::new();
-
-    //     loop {
-    //         let data = stream.next().await;
-
-    //         let row = match data {
-    //             Some(Ok(data)) => data,
-    //             Some(Err(e)) => return Err(e),
-    //             None => break,
-    //         };
-
-    //         if is_eof(&row) {
-    //             break;
-    //         }
-
-    //         nrow.put_slice(&row);
-
-    //         let mut row_data_text = RowDataText::new(arc_col_info.clone(), row.clone().split_off(4));
-    //         // println!("{:?}", row_data_text);
-    //         let str = row_data_text.decode_with_name::<String>("str").unwrap().unwrap();
-    //         println!("{:?}", str);
-
-    //         let _ = req
-    //             .framed
-    //             .codec_mut()
-    //             .encode(PacketSend::EncodeOffset(row[4..].into(), buf.len()), &mut buf);
-    //     }
-    // }
 
     pub async fn handle_query_resultset<'b>(
         req: &mut ReqContext<T, C>,

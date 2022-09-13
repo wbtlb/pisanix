@@ -38,6 +38,10 @@ impl Default for RandomWeighted {
 }
 
 impl LoadBalance for RandomWeighted {
+    fn next_by_name(&self, addr: String) -> Option<Endpoint> {
+        None
+    }
+
     // next: get next endpoint
     fn next(&mut self) -> Option<Endpoint> {
         if self.n == 0 {

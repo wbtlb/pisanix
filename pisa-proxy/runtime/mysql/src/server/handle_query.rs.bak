@@ -1,0 +1,232 @@
+// Copyright 2022 SphereEx Authors
+// 
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+// 
+//     http://www.apache.org/licenses/LICENSE-2.0
+// 
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+use crate::server::PisaMySQLService;
+use strategy::route::RouteInput;
+use pisa_error::error::Error;
+use conn_pool::PoolConn;
+use mysql_protocol::client::conn::ClientConn;
+use crate::mysql::ReqContext;
+use tracing::error;
+use mysql_parser::ast::*;
+use crate::{
+    transaction_fsm::{TransEventName, TransFsm},
+};
+use mysql_protocol::server::codec::CommonPacket;
+use mysql_protocol::err::ProtocolError;
+use bytes::BytesMut;
+use tokio_util::codec::Encoder;
+use mysql_protocol::server::codec::PacketSend;
+use tokio_util::codec::Decoder;
+use tokio::io::{AsyncRead, AsyncWrite};
+use pisa_error::error::ErrorKind;
+use mysql_parser::ast::SelectStmt;
+use futures::SinkExt;
+use bytes::BufMut;
+use mysql_protocol::server::codec::make_eof_packet;
+
+#[derive(Debug)]
+pub struct RewriteOutput {
+    // change: Change,
+    sql: String,
+    endpoint: String,
+}
+
+fn rewrite_mock() -> Vec<RewriteOutput> {
+    vec![
+        RewriteOutput {
+            sql: "select str from mixer.test_shard_hash_0000".to_string(),
+            endpoint: "127.0.0.1:3306".to_string(),
+        },
+        RewriteOutput {
+            sql: "select str from mixer.test_shard_hash_0001".to_string(),
+            endpoint: "127.0.0.1:3306".to_string(),
+        }
+    ]
+}
+
+impl<T, C> PisaMySQLService<T, C>
+where
+    T: AsyncRead + AsyncWrite + Unpin + Send,
+    C: Decoder<Item = BytesMut>
+        + Encoder<PacketSend<Box<[u8]>>, Error = ProtocolError>
+        + Send
+        + CommonPacket,
+{
+    pub async fn query_inner_get_conn(
+        req: &mut ReqContext<T, C>,
+        sql: &str,
+        payload: &[u8],
+    ) -> Result<PoolConn<ClientConn>, Error> {
+        match Self::get_ast(req, sql) {
+            Err(err) => {
+                error!("err: {:?}", err);
+                Self::fsm_trigger(
+                    &mut req.fsm,
+                    TransEventName::QueryEvent,
+                    RouteInput::Statement(sql),
+                )
+                .await
+            }
+
+            Ok(stmt) => match &stmt[0] {
+                SqlStmt::Set(stmt) => {
+                    Self::handle_set_stmt(req, stmt, sql).await;
+                    req.fsm.get_conn().await
+                }
+                //TODO: split sql stmt for sql audit
+                SqlStmt::BeginStmt(_stmt) => {
+                    Self::fsm_trigger(
+                        &mut req.fsm,
+                        TransEventName::StartEvent,
+                        RouteInput::Transaction(sql),
+                    )
+                    .await
+                }
+
+                SqlStmt::Start(_stmt) => {
+                    Self::fsm_trigger(
+                        &mut req.fsm,
+                        TransEventName::StartEvent,
+                        RouteInput::Transaction(sql),
+                    )
+                    .await
+                }
+
+                SqlStmt::Commit(_stmt) => {
+                    Self::fsm_trigger(
+                        &mut req.fsm,
+                        TransEventName::CommitRollBackEvent,
+                        RouteInput::Transaction(sql),
+                    )
+                    .await
+                }
+
+                SqlStmt::Rollback(_stmt) => {
+                    Self::fsm_trigger(
+                        &mut req.fsm,
+                        TransEventName::CommitRollBackEvent,
+                        RouteInput::Transaction(sql),
+                    )
+                    .await
+                }
+
+                SqlStmt::SelectStmt(stmt) => {
+                    // req.sharding.clone().lock().sharding_test();
+                    Ok(Self::handle_select(stmt, sql, req, payload).await.unwrap())
+                }
+
+                SqlStmt::InsertStmt(_stmt) => {
+                    Self::handle_insert(sql, req).await
+                }
+
+                SqlStmt::UpdateStmt(_stmt) => {
+                    Self::handle_update(sql, req).await
+                }
+
+                SqlStmt::DeleteStmt(_stmt) => {
+                    Self::handle_delete(sql, req).await
+                }
+
+                _ => {
+                    Ok(Self::handle_other(sql, req, payload).await.unwrap())
+                }
+            },
+        }
+    }
+
+    async fn handle_select(stmt: &SelectStmt, sql: &str, req: &mut ReqContext<T, C>, payload: &[u8]) -> Result<PoolConn<ClientConn>, Error> {
+        let mut client_conn = Self::fsm_trigger(
+            &mut req.fsm,
+            TransEventName::QueryEvent,
+            RouteInput::Statement(sql),
+        )
+        .await.unwrap();
+
+        let plan = req.sharding.clone().lock().build_plan(sql.to_string(), mysql_parser::ast::SqlStmt::SelectStmt(stmt.clone()), "t_order".to_string());
+
+        let rewrite_output = rewrite_mock();
+
+        let mut buf: BytesMut = BytesMut::new();
+        buf.put_slice(b"\x01\0\0\x01\x01I\0\0\x02\x03def\x05mixer\x14test_shard_hash_0000\x14test_shard_hash_0000\x03str\x03str\x0c-\0\0\x04\0\0\xfd\0\0\0\0\0\x05\0\0\x03\xfe\0\0\x02\0");
+        for ro in rewrite_output {
+            let payload = ro.sql.as_bytes();
+            let stream = match client_conn.send_query(payload).await {
+                Ok(stream) => stream,
+                Err(err) => return Err(Error::new(ErrorKind::Protocol(err))),
+            };
+
+            let (header, row) = Self::handle_query_resultset1(req, stream).await.unwrap();
+            
+            buf.put_slice(&row);
+            //println!("{:?}-{:?}", header, row);
+            //buf.put_slice(&bb);
+        }
+
+        let _ = req
+             .framed
+             .codec_mut()
+             .encode(PacketSend::EncodeOffset(make_eof_packet()[4..].into(), buf.len()), &mut buf);
+        //println!("buf >>>> {:#?}", buf);
+        req.framed.send(PacketSend::Origin(buf[..].into())).await.unwrap();
+
+        Ok(client_conn)
+    }
+
+    async fn handle_insert(sql: &str, req: &mut ReqContext<T, C>) -> Result<PoolConn<ClientConn>, Error> {
+        Self::fsm_trigger(
+            &mut req.fsm,
+            TransEventName::QueryEvent,
+            RouteInput::Statement(sql),
+        ).await
+    }
+
+    async fn handle_update(sql: &str, req: &mut ReqContext<T, C>) -> Result<PoolConn<ClientConn>, Error> {
+        Self::fsm_trigger(
+            &mut req.fsm,
+            TransEventName::QueryEvent,
+            RouteInput::Statement(sql),
+        ).await
+    }
+
+    async fn handle_delete(sql: &str, req: &mut ReqContext<T, C>) -> Result<PoolConn<ClientConn>, Error> {
+        Self::fsm_trigger(
+            &mut req.fsm,
+            TransEventName::QueryEvent,
+            RouteInput::Statement(sql),
+        ).await
+    }
+
+    async fn handle_other(sql: &str, req: &mut ReqContext<T, C>, payload: &[u8]) -> Result<PoolConn<ClientConn>, Error> {
+        let mut client_conn = Self::fsm_trigger(
+            &mut req.fsm,
+            TransEventName::QueryEvent,
+            RouteInput::Statement(sql),
+        )
+        .await.unwrap();
+
+        // query_inner:
+        let stream = match client_conn.send_query(payload).await {
+            Ok(stream) => stream,
+            Err(err) => return Err(Error::new(ErrorKind::Protocol(err))),
+        };
+
+        // Self::handle_query_resultset(req, stream).await.map_err(ErrorKind::from)?;
+        Self::handle_query_resultset(req, stream).await.unwrap();
+
+        Ok(client_conn)
+    }
+}
+
+// b"\x01\0\0\x01\x01G\0\0\x02\x03def\x05mixer\x14test_shard_hash_0000\x14test_shard_hash_0000\x02id\x02id\x0c?\0@\0\0\0\x08#P\0\0\0\x05\0\0\x03\xfe\0\0\x02\0\x02\0\0\x04\x014\x02\0\0\x05\x018\x03\0\0\x06\x0212\x03\0\0\x07\x0216\x03\0\0\x08\x0217\x03\0\0\t\x0218\x03\0\0\n\x0219\x05\0\0\x0b\xfe\0\0\x02\0\x01\0\0\x0c\x01G\0\0\r\x03def\x05mixer\x14test_shard_hash_0001\x14test_shard_hash_0001\x02id\x02id\x0c?\0@\0\0\0\x08#P\0\0\0\x05\0\0\x0e\xfe\0\0\x02\0\x02\0\0\x0f\x011\x02\0\0\x10\x015\x02\0\0\x11\x019\x03\0\0\x12\x0213\x03\0\0\x13\x0217\x05\0\0\x14\xfe\0\0\x02\0"

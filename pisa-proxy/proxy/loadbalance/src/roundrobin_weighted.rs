@@ -50,6 +50,10 @@ impl LoadBalance for RoundRobinWeighted {
         self.n += 1;
     }
 
+    fn next_by_name(&self, addr: String) -> Option<Endpoint> {
+        None
+    }
+
     fn next(&mut self) -> Option<Endpoint> {
         if self.n == 0 {
             return None;

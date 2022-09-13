@@ -149,7 +149,6 @@ pub trait BufExt: Buf {
         let (length, ..) = self.get_lenc_int();
         self.advance(length as usize)
     }
-
 }
 
 //impl<T: AsRef<[u8]> + Buf> BufExt for T {}

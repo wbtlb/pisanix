@@ -27,7 +27,7 @@ pub trait RowData<T: AsRef<[u8]>> {
     fn decode_with_name<V: Value>(&mut self, name: &str) -> value::Result<V>;
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum RowDataTyp<T: AsRef<[u8]>> {
     Text(RowDataText<T>),
     Binary(RowDataBinary<T>)
@@ -37,7 +37,7 @@ crate::gen_row_data!(RowDataTyp, Text(RowDataText), Binary(RowDataBinary));
 
 #[derive(Debug, Clone)]
 pub struct RowDataCommon {
-    columns: Arc<[ColumnInfo]>,
+    pub columns: Arc<[ColumnInfo]>,
 }
 
 impl RowDataCommon {
@@ -54,7 +54,7 @@ impl RowDataCommon {
 // For ProtocolText::ResultsetRow
 #[derive(Debug, Clone)]
 pub struct RowDataText<T: AsRef<[u8]>> {
-    common: RowDataCommon,
+    pub common: RowDataCommon,
     buf: T,
 }
 
@@ -72,6 +72,7 @@ impl<T: AsRef<[u8]>> RowData<T> for RowDataText<T> {
     // The method must be called in column order
     fn decode_with_name<V: Value>(&mut self, name: &str) -> value::Result<V> {
         let name_idx = self.common.get_idx(name)?;
+        println!("name idx: {:?}", name_idx);
         let mut idx: usize = 0;
         for _ in 0..name_idx {
             let (length, _, pos) = length_encode_int(&self.buf.as_ref()[idx..]);
@@ -83,6 +84,7 @@ impl<T: AsRef<[u8]>> RowData<T> for RowDataText<T> {
             return Ok(None);
         }
 
+        println!("index >>>>> {:?}-{:?}", idx + pos as usize, idx + (pos + length) as usize);
         let row_data = &self.buf.as_ref()[idx + pos as usize .. idx + (pos + length) as usize];
 
         Value::from(row_data)
@@ -306,6 +308,7 @@ mod test {
         assert_eq!(columns[1].column_name, "User");
 
         let row_buf = &get_test_row_data()[4..];
+        println!("{:?}", get_test_row_data());
 
         let mut row = RowDataText::new(columns.into_boxed_slice().into(), row_buf);
 
@@ -385,7 +388,7 @@ mod test {
         let mut column_buf = &get_test_binary_row_column_null()[..];
         let columns: Arc<[ColumnInfo]> = column_buf.decode_columns().into_boxed_slice().into();
         let row_buf = &get_test_binary_row_data_null()[4..];
-
+        println!("{:?}-{:?}", columns.clone(), row_buf.clone());
         let mut row = RowDataBinary::new(columns.clone(), row_buf);
         let res = row.decode_with_name::<NaiveDateTime>("deleted_at");
         assert_eq!(res.unwrap(), None);

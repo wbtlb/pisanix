@@ -24,7 +24,7 @@ use common::ast_cache::ParserAstCache;
 use conn_pool::Pool;
 use endpoint::endpoint::Endpoint;
 use futures::{SinkExt, StreamExt};
-use loadbalance::balance::{Balance, LoadBalance};
+use loadbalance::balance::{Balance, LoadBalance, AlgorithmName};
 use mysql_parser::{
     parser::Parser,
 };
@@ -54,6 +54,7 @@ use strategy::{
     config::TargetRole,
     readwritesplitting::ReadWriteEndpoint,
     route::RouteStrategy,
+    sharding::ShardingRouteStrategy,
 };
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_util::codec::{Decoder, Encoder, Framed};
@@ -88,6 +89,16 @@ impl MySQLProxy {
             }
         }
 
+        if !self.proxy_config.sharding.is_none() && self.proxy_config.read_write_splitting.is_none() {
+            let mut balance = Balance.build_balance(AlgorithmName::Random);
+            rw.append(&mut ro);
+            for ep in rw.into_iter() {
+                balance.add(ep);
+            }
+
+            return RouteStrategy::new_with_simple_route(balance);
+        }
+
         if self.proxy_config.read_write_splitting.is_none() {
             let balance_type =
                 self.proxy_config.simple_loadbalance.as_ref().unwrap().balance_type.clone();
@@ -107,11 +118,17 @@ impl MySQLProxy {
             rw_endpoint,
         )
     }
+
+    fn build_sharding_route(&self) -> ShardingRouteStrategy {
+        let sharding_config = self.proxy_config.sharding.clone().unwrap();
+        ShardingRouteStrategy::build(sharding_config)
+    }
 }
 
 #[async_trait::async_trait]
 impl proxy::factory::Proxy for MySQLProxy {
     async fn start(&mut self) -> Result<(), Error> {
+
         let listener = Listener {
             name: self.proxy_config.name.clone(),
             backend_type: "mysql".to_string(),
@@ -135,6 +152,11 @@ impl proxy::factory::Proxy for MySQLProxy {
         // Currently simple_loadbalancer purely provide a list of nodes without any strategy.
         let lb = Arc::new(tokio::sync::Mutex::new(self.build_route()));
 
+        let ss = self.build_sharding_route();
+        // ss.sharding_test();
+
+        let sharding = Arc::new(Mutex::new(self.build_sharding_route()));
+
         let mut plugin: Option<PluginPhase> = None;
         if let Some(config) = &self.proxy_config.plugin {
             plugin = Some(PluginPhase::new(config.clone()))
@@ -148,6 +170,7 @@ impl proxy::factory::Proxy for MySQLProxy {
             let socket = proxy.accept(&listener).await.map_err(ErrorKind::Io)?;
 
             let lb = Arc::clone(&lb);
+            let sharding = Arc::clone(&sharding);
             let plugin = plugin.clone();
             let _pcfg = self.proxy_config.clone();
             let parser = parser.clone();
@@ -183,6 +206,7 @@ impl proxy::factory::Proxy for MySQLProxy {
                 let framed = Framed::with_capacity(io, packet_codec, 16384); 
                 let context = ReqContext {
                     fsm: TransFsm::new_trans_fsm(lb, pool),
+                    sharding,
                     ast_cache,
                     plugin,
                     metrics_collector: MySQLServerMetricsCollector,
@@ -204,6 +228,7 @@ impl proxy::factory::Proxy for MySQLProxy {
 pub struct ReqContext<T, C> {
     pub name: String,
     pub fsm: TransFsm,
+    pub sharding: Arc<Mutex<ShardingRouteStrategy>>,
     pub mysql_parser: Arc<Parser>,
     pub ast_cache: Arc<Mutex<ParserAstCache>>,
     pub plugin: Option<PluginPhase>,

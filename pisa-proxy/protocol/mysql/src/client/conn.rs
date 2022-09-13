@@ -244,10 +244,12 @@ impl ClientConn {
         if header[4] == OK_HEADER || header[4] == ERR_HEADER {
             return Ok(None);
         }
-
+        
         let  _ = header.split_to(4);
         let (cols, ..) = header.get_lenc_int();
 
+        let mut buf = BytesMut::with_capacity(1 << 16);
+        
         let mut col_buf = vec![];
         for _ in 0..cols {
             let data = stream.next().await;

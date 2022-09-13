@@ -1,0 +1,17 @@
+// Copyright 2022 Database Mesh Authors
+// 
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+// 
+//     http://www.apache.org/licenses/LICENSE-2.0
+// 
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+after buf [1, 0, 0, 1, 5]
+vvv >>> b"\x01\0\0\x01\x05G\0\0\x02\x03def\x05mixer\x14test_shard_hash_0000\x14test_shard_hash_0000\x02id\x02id\x0c?\0@\0\0\0\x08#P\0\0\0I\0\0\x03\x03def\x05mixer\x14test_shard_hash_0000\x14test_shard_hash_0000\x03str\x03str\x0c-\0\0\x04\0\0\xfd\0\0\0\0\0E\0\0\x04\x03def\x05mixer\x14test_shard_hash_0000\x14test_shard_hash_0000\x01f\x01f\x0c?\0\x16\0\0\0\x05\0\0\x1f\0\0E\0\0\x05\x03def\x05mixer\x14test_shard_hash_0000\x14test_shard_hash_0000\x01u\x01u\x0c?\0\x03\0\0\0\x01 \0\0\0\0E\0\0\x06\x03def\x05mixer\x14test_shard_hash_0000\x14test_shard_hash_0000\x01i\x01i\x0c?\0\x04\0\0\0\x01\0\0\0\0\0\x05\0\0\x07\xfe\0\0\x02\0"
+header >>> b"\x01\0\0\x01\x05G\0\0\x02\x03def\x05mixer\x14test_shard_hash_0000\x14test_shard_hash_0000\x02id\x02id\x0c?\0@\0\0\0\x08#P\0\0\0I\0\0\x03\x03def\x05mixer\x14test_shard_hash_0000\x14test_shard_hash_0000\x03str\x03str\x0c-\0\0\x04\0\0\xfd\0\0\0\0\0E\0\0\x04\x03def\x05mixer\x14test_shard_hash_0000\x14test_shard_hash_0000\x01f\x01f\x0c?\0\x16\0\0\0\x05\0\0\x1f\0\0E\0\0\x05\x03def\x05mixer\x14test_shard_hash_0000\x14test_shard_hash_0000\x01u\x01u\x0c?\0\x03\0\0\0\x01 \0\0\0\0E\0\0\x06\x03def\x05mixer\x14test_shard_hash_0000\x14test_shard_hash_0000\x01i\x01i\x0c?\0\x04\0\0\0\x01\0\0\0\0\0\x05\0\0\x07\xfe\0\0\x02\0\x15\0\0\x08\x014\x04abc4\x043.14\x03255\x04-127\x05\0\0\t\xfe\0\0\x02\0"
