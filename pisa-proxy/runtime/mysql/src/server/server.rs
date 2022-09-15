@@ -68,9 +68,11 @@ where
 
     pub async fn fsm_trigger(
         fsm: &mut TransFsm,
+        // fsm: Arc<tokio::sync::Mutex<TransFsm>>,
         state_name: TransEventName,
         input: RouteInput<'_>,
     ) -> Result<PoolConn<ClientConn>, Error> {
+        // let mut fsm = fsm.clone().lock().await;
         fsm.trigger(state_name, input).await?;
         fsm.get_conn().await
     }
@@ -348,10 +350,8 @@ where
 
             nrow.put_slice(&row);
 
-            let mut row_data_text = RowDataText::new(arc_col_info.clone(), row.clone().split_off(4));
-            // println!("{:?}", row_data_text);
-            let str = row_data_text.decode_with_name::<String>("str").unwrap().unwrap();
-            println!("{:?}", str);
+            // let mut row_data_text = RowDataText::new(arc_col_info.clone(), row.clone().split_off(4));
+            // let str = row_data_text.decode_with_name::<String>("str").unwrap().unwrap();
 
             let _ = req
                 .framed
@@ -601,24 +601,14 @@ where
     async fn query(cx: &mut ReqContext<T, C>, payload: &[u8]) -> Result<RespContext, Error> {
         let now = Instant::now();
         let sql = std::str::from_utf8(payload).unwrap().trim_matches(char::from(0));
-        let mut client_conn = Self::query_inner_get_conn(cx, sql, payload).await?;
+
+        let client_conn = Self::query_inner_get_conn(cx, sql, payload).await?;
 
         let ep = client_conn.get_endpoint();
         collect_sql_processed_total!(cx, "COM_QUERY", ep.as_ref().unwrap());
         collect_sql_under_processing_inc!(cx, "COM_QUERY", ep.as_ref().unwrap());
 
         // let _ = Self::query_inner(cx, &mut client_conn, payload).await?;
-
-        /*
-        query_inner:
-        let stream = match client_conn.send_query(payload).await {
-            Ok(stream) => stream,
-            Err(err) => return Err(Error::new(ErrorKind::Protocol(err))),
-        };
-
-        Self::handle_query_resultset(req, stream).await.map_err(ErrorKind::from)?;
-        */
-
 
         cx.fsm.put_conn(client_conn);
 

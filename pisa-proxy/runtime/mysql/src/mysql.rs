@@ -205,7 +205,7 @@ impl proxy::factory::Proxy for MySQLProxy {
 
                 let framed = Framed::with_capacity(io, packet_codec, 16384); 
                 let context = ReqContext {
-                    fsm: TransFsm::new_trans_fsm(lb, pool),
+                    fsm: TransFsm::new_trans_fsm(lb, pool.clone()),
                     sharding,
                     ast_cache,
                     plugin,
@@ -214,6 +214,7 @@ impl proxy::factory::Proxy for MySQLProxy {
                     framed,
                     name: proxy_name,
                     mysql_parser: parser,
+                    pool,
                 };
 
                 if let Err(e) = ins.run(context).await {
@@ -239,6 +240,7 @@ pub struct ReqContext<T, C> {
     pub concurrency_control_rule_idx: Option<usize>,
     // The codc for MySQL Protocol
     pub framed: Framed<T, C>,
+    pub pool: Pool<ClientConn>,
 }
 
 /// Handle the return value of the command

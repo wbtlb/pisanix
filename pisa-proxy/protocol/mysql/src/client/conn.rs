@@ -95,6 +95,21 @@ impl ClientConn {
         Ok((res.1, res.2))
     }
 
+    pub async fn send_query1<'a>(
+        &'a mut self,
+        val: &'a [u8],
+    ) -> Result<(), ProtocolError> {
+        let framed = self.framed.take().unwrap();
+
+        let mut resultset_codec = framed.into_resultset();
+
+        resultset_codec.send(ResultSendCommand::Binary((COM_QUERY, val))).await?;
+
+        self.framed = Some(Box::new(ClientCodec::Resultset(resultset_codec)));
+
+        Ok(())
+    }
+
     pub async fn send_query<'a>(
         &'a mut self,
         val: &'a [u8],
