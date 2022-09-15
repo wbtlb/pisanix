@@ -55,6 +55,7 @@ use strategy::{
     readwritesplitting::ReadWriteEndpoint,
     route::RouteStrategy,
     sharding::ShardingRouteStrategy,
+    sharding_rewrite::ShardingRewrite,
 };
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_util::codec::{Decoder, Encoder, Framed};
@@ -121,7 +122,14 @@ impl MySQLProxy {
 
     fn build_sharding_route(&self) -> ShardingRouteStrategy {
         let sharding_config = self.proxy_config.sharding.clone().unwrap();
-        ShardingRouteStrategy::build(sharding_config)
+
+        let mut endpoints: Vec<Endpoint> = vec![];
+        for mysql_node in &self.mysql_nodes {
+            let endpoint = Endpoint::from(mysql_node.clone());
+            endpoints.push(endpoint);
+        }
+
+        ShardingRouteStrategy::build(sharding_config, endpoints)
     }
 }
 
@@ -152,7 +160,7 @@ impl proxy::factory::Proxy for MySQLProxy {
         // Currently simple_loadbalancer purely provide a list of nodes without any strategy.
         let lb = Arc::new(tokio::sync::Mutex::new(self.build_route()));
 
-        let ss = self.build_sharding_route();
+        // let ss = self.build_sharding_route();
         // ss.sharding_test();
 
         let sharding = Arc::new(Mutex::new(self.build_sharding_route()));
@@ -230,6 +238,7 @@ pub struct ReqContext<T, C> {
     pub name: String,
     pub fsm: TransFsm,
     pub sharding: Arc<Mutex<ShardingRouteStrategy>>,
+    // pub sharding_rewrite: Arc<Mutex<ShardingRewrite>>,
     pub mysql_parser: Arc<Parser>,
     pub ast_cache: Arc<Mutex<ParserAstCache>>,
     pub plugin: Option<PluginPhase>,

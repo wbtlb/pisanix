@@ -106,8 +106,30 @@ mod test {
             }],
         };
 
+        let discovery = crate::config::Discovery::Mha(crate::config::MasterHighAvailability {
+            user: String::from("root"),
+            password: String::from("root"),
+            monitor_period: 1000,
+            connect_period: 1000,
+            connect_timeout: 1000,
+            connect_failure_threshold: 1000,
+            ping_period: 1000,
+            ping_timeout: 1000,
+            ping_failure_threshold: 1000,
+            replication_lag_period: 1000,
+            replication_lag_timeout: 10000,
+            replication_lag_failure_threshold: 1000,
+            max_replication_lag: 1000,
+            read_only_period: 1000,
+            read_only_timeout: 1000,
+            read_only_failure_threshold: 10000,
+            read_only_enabled: true,
+            replication_lag_enabled: true,
+        });
+
         let config = super::config::ReadWriteSplitting {
-            statics: Some(super::config::ReadWriteSplittingStatic { default_target, rules }),
+            statics: Some(super::config::ReadWriteSplittingStatic { default_target: default_target.clone(), rules: rules.clone() }),
+            dynamic: Some(super::config::ReadWriteSplittingDynamic {default_target, rules, discovery}),
         };
 
         let mut rws = ReadWriteSplittingStaticBuilder::build(config.statics.unwrap(), rw_endpoint);

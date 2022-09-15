@@ -72,20 +72,36 @@ impl Visitor for SelectStmt {
         match self {
             Self::Query(query) => {
                 let mut node = Node::Query(query);
-                tf.trans(&mut node);
+                let is_skip = tf.trans(&mut node);
 
-                let new_node = node.into_query().unwrap().visit(tf);
-                Self::Query(Box::new(new_node))
-            
+                let new_node = node.into_query().unwrap(); 
+                if is_skip {
+                    *self = Self::Query(Box::new(new_node.clone()));
+                    tf.complete(&mut Node::SelectStmt(self));
+                    return self.clone();
+                }
+
+                let new_node = new_node.visit(tf);
+                *self = Self::Query(Box::new(new_node));
+                tf.complete(&mut Node::SelectStmt(self));
+                self.clone()
             }
 
             Self::SubQuery(query) => {
                 let mut node = Node::SubQuery(query);
-                tf.trans(&mut node);
+                let is_skip = tf.trans(&mut node);
 
-                let new_node = node.into_sub_query().unwrap().visit(tf);
-                Self::SubQuery(Box::new(new_node))
-            
+                let new_node = node.into_sub_query().unwrap(); 
+                if is_skip {
+                    *self = Self::SubQuery(Box::new(new_node.clone()));
+                    tf.complete(&mut Node::SelectStmt(self));
+                    return self.clone();
+                }
+
+                let new_node = new_node.visit(tf);
+                *self = Self::SubQuery(Box::new(new_node));
+                tf.complete(&mut Node::SelectStmt(self));
+                self.clone()
             }
 
             Self::With(query) => {
@@ -1449,7 +1465,7 @@ impl Visitor for OrderClause {
 #[derive(Debug, Clone)]
 pub struct LimitClause {
     pub span: Span,
-    pub opts: Vec<String>,
+    pub opts: Vec<LimitOption>,
     pub offset: bool,
 }
 
@@ -1457,17 +1473,17 @@ impl LimitClause {
     pub fn format(&self) -> String {
         let mut clause = Vec::with_capacity(self.opts.len() + 1);
         clause.push("LIMIT".to_string());
-        clause.push(self.opts[0].to_string());
+        clause.push(self.opts[0].opt.clone());
 
         if self.offset {
             clause.push("OFFSET".to_string());
-            clause.push(self.opts[1].to_string());
+            clause.push(self.opts[1].opt.clone());
 
             return clause.join(" ");
         }
 
         if let Some(opt) = self.opts.get(1) {
-            clause.push(opt.to_string());
+            clause.push(opt.opt.clone());
             return clause.join(", ");
         }
 
@@ -1479,6 +1495,12 @@ impl Visitor for LimitClause {
     fn visit<T: Transformer>(&mut self, _tf: &mut T) -> Self {
         self.clone()
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct LimitOption {
+    pub span: Span,
+    pub opt: String,
 }
 
 #[derive(Debug, Clone)]
@@ -2692,7 +2714,7 @@ impl ValOrVals {
 pub struct InsertVals {
     pub span: Span,
     pub val_ident: ValOrVals,
-    pub values: Vec<Vec<Expr>>,
+    pub values: Vec<RowValue>,
 }
 
 impl InsertVals {
@@ -2700,13 +2722,7 @@ impl InsertVals {
         let mut values = Vec::with_capacity(3);
 
         for v in &self.values {
-            let row = vec![
-                "(".to_string(),
-                v.iter().map(|x| x.format()).collect::<Vec<String>>().join(","),
-                ")".to_string(),
-            ];
-
-            values.push(row.join(" "))
+            values.push(v.format())
         }
 
         vec![self.val_ident.format(), values.join(",")].join(" ")
@@ -2718,19 +2734,52 @@ impl Visitor for InsertVals {
         let mut new_values = Vec::with_capacity(self.values.len());
 
         for v in self.values.iter_mut() {
-            let mut sub_new_exprs = Vec::with_capacity(v.len());
-            for vv in v.iter_mut() {
-                let mut node = Node::Expr(vv);
-                tf.trans(&mut node);
-
-                let new_node = node.into_expr().unwrap().visit(tf);
-                sub_new_exprs.push(new_node);
-            }
-
-            new_values.push(sub_new_exprs);
+            let mut node = Node::RowValue(v);
+            tf.trans(&mut node);
+            let new_node = node.into_row_value().unwrap().visit(tf);
+            new_values.push(new_node);
         }
 
         self.values = new_values;
+
+        self.clone()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct RowValue {
+    pub span: Span,
+    pub values: Vec<Expr>
+}
+
+impl RowValue {
+    fn format(&self) -> String {
+        let values = vec![ 
+            "(".to_string(),
+            self.values.iter().map(|x| x.format()).collect::<Vec<String>>().join(","),
+            ")".to_string(),
+        ];
+
+        values.join(" ")
+    }
+}
+
+
+impl Visitor for RowValue {
+    fn visit<T: Transformer>(&mut self, tf: &mut T) -> Self {
+        let mut new_values = Vec::with_capacity(self.values.len());
+
+        for v in self.values.iter_mut() {
+            let mut node = Node::Expr(v);
+            tf.trans(&mut node);
+
+            let new_node = node.into_expr().unwrap().visit(tf);
+            new_values.push(new_node);
+        }
+
+        self.values = new_values;
+
+        tf.complete(&mut Node::RowValue(self));
 
         self.clone()
     }
@@ -2829,7 +2878,7 @@ pub struct UpdateStmt {
     pub updates: Vec<UpdateElem>,
     pub where_clause: Option<WhereClause>,
     pub order_clause: Option<OrderClause>,
-    pub simple_limit: Option<String>,
+    pub simple_limit: Option<LimitOption>,
 }
 
 impl UpdateStmt {
@@ -2865,7 +2914,7 @@ impl UpdateStmt {
 
         if let Some(limit) = &self.simple_limit {
             update.push("LIMIT".to_string());
-            update.push((*limit).to_string())
+            update.push(limit.opt.clone())
         }
 
         update.join(" ")
@@ -2930,7 +2979,7 @@ pub struct DeleteStmt {
     pub partition_names: Vec<String>,
     pub where_clause: Option<WhereClause>,
     pub order_clause: Option<OrderClause>,
-    pub simple_limit: Option<String>,
+    pub simple_limit: Option<LimitOption>,
     pub table_alias_refs: Vec<String>,
     pub table_refs: Vec<TableRef>,
 }
@@ -2985,7 +3034,7 @@ impl DeleteStmt {
 
             if let Some(limit) = &self.simple_limit {
                 delete.push("LIMIT".to_string());
-                delete.push((*limit).to_string())
+                delete.push(limit.opt.clone())
             }
 
             return delete.join(" ");

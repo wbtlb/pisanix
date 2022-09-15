@@ -20,6 +20,9 @@ use crate::route::RouteStrategy;
 use crate::Route;
 use crate::config::Sharding;
 use mysql_parser::ast::*;
+use crate::sharding_rewrite::ShardingRewrite;
+// use proxy::proxy::MySQLNode;
+use crate::sharding_rewrite::ShardingRewriteOutput;
 
 pub trait ShardingRoute {
     type Route;
@@ -32,65 +35,46 @@ pub trait ShardingRoute {
 }
 
 pub struct ShardingRouteStrategy {
-    pub sharding_config: HashMap<String, Sharding>,
-    // pub sharding_config: Vec<Sharding>,
-    // pub statement: Option<SqlStmt>,
-    // pub sql: String,
-}
-
-#[derive(Debug)]
-pub struct Plan {
-    // sharding_config: HashMap::<String, Sharding>,
-    sharding_rule: Sharding,
-    sql: String,
-    stmt: SqlStmt
+    pub sharding_rewrite: ShardingRewrite,
+    pub sharding_config: Vec<Sharding>,
 }
 
 impl ShardingRouteStrategy {
-    pub fn build(sharding_config: Vec<Sharding>) -> ShardingRouteStrategy {
-        let mut sharding = HashMap::<String, Sharding>::new();
+    pub fn build(sharding_config: Vec<Sharding>, endpoints: Vec<Endpoint>) -> ShardingRouteStrategy {
+        let sharding_rewrite = ShardingRewrite::new(sharding_config.clone(), endpoints);
 
-        for sc in sharding_config {
-            sharding.insert(sc.clone().table_name, sc);
-        }
         ShardingRouteStrategy {
-            sharding_config: sharding
+            sharding_rewrite,
+            sharding_config
         }
     }
 
-    pub fn sharding_test(&self) {
-        println!("sharding ...");
-    }
-
-    pub fn build_plan(&self, sql: String, stmt: SqlStmt, table_name: String) -> Plan {
-        let sharding_rule = self.sharding_config.get(&table_name).unwrap().clone();
-        Plan {
-            sharding_rule,
-            sql,
-            stmt,
-        }
+    pub fn build_plan(&mut self, sql: String, mut stmt: SqlStmt) -> Result<Vec<ShardingRewriteOutput>, Box<dyn std::error::Error>> {
+        self.sharding_rewrite.set_raw_sql(sql.to_string());
+        let meta = self.sharding_rewrite.get_meta(&mut stmt);
+        println!("{:#?}", meta);
+        self.sharding_rewrite.database_strategy(meta)
     }
 }
 
+// impl<'a> ShardingRoute for ShardingRouteStrategy<'a> {
+//     type Route = Option<RouteStrategy>;
 
-impl ShardingRoute for ShardingRouteStrategy {
-    type Route = Option<RouteStrategy>;
-
-    fn sharding_dispatch(
-        &mut self,
-        input: &RouteInput,
-        route: Self::Route
-    ) -> Result<HashMap::<String, Endpoint>, Error> {
-        let res = HashMap::new();
-        match route {
-            Some(mut r) => {
-                let (ep, role) = r.dispatch(input).unwrap();
-                println!("{:#?}:{:#?} -> {:#?}", ep.clone().as_ref().unwrap().addr, ep.unwrap().user, role);
-                Ok(res)
-            }
-            None => {
-                Ok(res)
-            }
-        }
-    }
-}
+//     fn sharding_dispatch(
+//         &mut self,
+//         input: &RouteInput,
+//         route: Self::Route
+//     ) -> Result<HashMap::<String, Endpoint>, Error> {
+//         let res = HashMap::new();
+//         match route {
+//             Some(mut r) => {
+//                 let (ep, role) = r.dispatch(input).unwrap();
+//                 println!("{:#?}:{:#?} -> {:#?}", ep.clone().as_ref().unwrap().addr, ep.unwrap().user, role);
+//                 Ok(res)
+//             }
+//             None => {
+//                 Ok(res)
+//             }
+//         }
+//     }
+// }

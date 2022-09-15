@@ -225,20 +225,19 @@ where
         for _ in 0 .. 10 {
             res.push(s.next().await.unwrap().unwrap());
         }
-
         res
     }
 
-    async fn handle_select(stmt: &SelectStmt, sql: &str, req: &mut ReqContext<T, C>, payload: &[u8]) -> Result<PoolConn<ClientConn>, Error> {
+    async fn handle_select(mut stmt: &SelectStmt, sql: &str, req: &mut ReqContext<T, C>, payload: &[u8]) -> Result<PoolConn<ClientConn>, Error> {
         let mut client_conn = Self::fsm_trigger(
             &mut req.fsm,
             TransEventName::QueryEvent,
             RouteInput::Statement(sql),
         )
         .await.unwrap();
-        
-        // build rewrite input structure
-        let plan = req.sharding.clone().lock().build_plan(sql.to_string(), mysql_parser::ast::SqlStmt::SelectStmt(stmt.clone()), "t_order".to_string());
+
+        let rewrite_output = req.sharding.clone().lock().build_plan(sql.to_string(), mysql_parser::ast::SqlStmt::SelectStmt(stmt.clone())).unwrap();
+        println!("rewrite_output: {:#?}", rewrite_output);
 
         // rewrite sql
         let rewrite_output = rewrite_mock_select();
@@ -332,7 +331,6 @@ where
             }
             
             // sort();
-            println!("res >> {:?}", res);
             header.put_slice(&res);
         }
 
@@ -354,10 +352,7 @@ where
         )
         .await.unwrap();
         
-        // build rewrite input structure
-        let plan = req.sharding.clone().lock().build_plan(sql.to_string(), mysql_parser::ast::SqlStmt::InsertStmt(Box::new(stmt.clone())), "t_order".to_string());
-
-        // rewrite sql
+        let rewrite_output = req.sharding.clone().lock().build_plan(sql.to_string(), mysql_parser::ast::SqlStmt::InsertStmt(Box::new(stmt.clone()))).unwrap();
         let rewrite_output = rewrite_mock_insert();
 
         let mut exec = FuturesOrdered::new();
@@ -422,11 +417,9 @@ where
             RouteInput::Statement(sql),
         )
         .await.unwrap();
-        
-        // build rewrite input structure
-        let plan = req.sharding.clone().lock().build_plan(sql.to_string(), mysql_parser::ast::SqlStmt::UpdateStmt(Box::new(stmt.clone())), "t_order".to_string());
 
         // rewrite sql
+        let rewrite_output = req.sharding.clone().lock().build_plan(sql.to_string(), mysql_parser::ast::SqlStmt::UpdateStmt(Box::new(stmt.clone()))).unwrap();
         let rewrite_output = rewrite_mock_update();
 
         let mut exec = FuturesOrdered::new();
@@ -491,11 +484,8 @@ where
             RouteInput::Statement(sql),
         )
         .await.unwrap();
-        
-        // build rewrite input structure
-        let plan = req.sharding.clone().lock().build_plan(sql.to_string(), mysql_parser::ast::SqlStmt::DeleteStmt(Box::new(stmt.clone())), "t_order".to_string());
 
-        // rewrite sql
+        let rewrite_output = req.sharding.clone().lock().build_plan(sql.to_string(), mysql_parser::ast::SqlStmt::DeleteStmt(Box::new(stmt.clone()))).unwrap();
         let rewrite_output = rewrite_mock_delete();
 
         let mut exec = FuturesOrdered::new();
